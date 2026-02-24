@@ -7,7 +7,6 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-// Product documentation - the assistant can ONLY answer from these docs
 const productDocs = [
   {
     title: "Reset Password",
@@ -66,68 +65,67 @@ function findRelevantDocs(query: string) {
     .map((s) => s.doc);
 }
 
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { sessionId, message } = await req.json();
+    const { sessionId, message, stream } = await req.json();
 
     if (!sessionId || !message) {
-      return new Response(
-        JSON.stringify({ error: "Missing sessionId or message" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return jsonResponse({ error: "Missing sessionId or message" }, 400);
     }
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Ensure session exists
-    await supabase.from("sessions").upsert({ id: sessionId }, { onConflict: "id" });
+    const { error: sessionError } = await supabase.from("sessions").upsert({ id: sessionId }, { onConflict: "id" });
+    if (sessionError) throw sessionError;
 
-    // Store user message
-    await supabase.from("messages").insert({
+    const { error: userMessageError } = await supabase.from("messages").insert({
       session_id: sessionId,
       role: "user",
       content: message,
     });
+    if (userMessageError) throw userMessageError;
 
-    // Fetch last 5 pairs of messages for context
-    const { data: history } = await supabase
+    const { data: history, error: historyError } = await supabase
       .from("messages")
       .select("role, content")
       .eq("session_id", sessionId)
       .order("created_at", { ascending: false })
       .limit(10);
+    if (historyError) throw historyError;
 
     const contextMessages = (history || []).reverse();
 
-    // Find relevant docs
     const relevantDocs = findRelevantDocs(message);
     const docsContext =
       relevantDocs.length > 0
         ? relevantDocs.map((d) => `**${d.title}**: ${d.content}`).join("\n\n")
-        : "";
+        : "No product-document match for this query.";
 
-    // Build LLM prompt
-    const systemPrompt = `You are a product support assistant. You MUST ONLY answer questions using the provided product documentation below. 
+    const systemPrompt = `You are an accurate and helpful AI chat assistant.
+Use the product documentation below whenever it is relevant.
+If the question is outside the product docs, still answer normally with your best knowledge.
+If you are not fully sure, say so briefly instead of inventing facts.
+Keep responses clear and concise.
 
-${docsContext ? `## Product Documentation:\n${docsContext}` : "No relevant documentation found."}
-
-## STRICT RULES:
-1. If the user's question can be answered using the product documentation above, provide a helpful answer based ONLY on that documentation.
-2. If the user sends a greeting (hi, hello, hey, etc.), respond with a friendly greeting and briefly list what you can help with (password reset, refund policy, billing, account settings, contact support).
-3. If the question CANNOT be answered from the documentation above, you MUST respond EXACTLY with: "Sorry, I don't have information about that."
-4. Do NOT make up information, guess, or provide answers outside the documentation.
-5. Keep responses concise and helpful.`;
+## Product Documentation:
+${docsContext}`;
 
     const llmMessages = [
       { role: "system", content: systemPrompt },
       ...contextMessages.map((m: any) => ({ role: m.role, content: m.content })),
     ];
 
-    // Call LLM via Lovable AI Gateway
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
 
@@ -140,47 +138,112 @@ ${docsContext ? `## Product Documentation:\n${docsContext}` : "No relevant docum
       body: JSON.stringify({
         model: "google/gemini-3-flash-preview",
         messages: llmMessages,
-        max_tokens: 500,
-        temperature: 0.1,
+        max_tokens: 700,
+        temperature: 0.2,
+        stream: Boolean(stream),
+        ...(stream ? { stream_options: { include_usage: true } } : {}),
       }),
     });
 
     if (!aiResponse.ok) {
       if (aiResponse.status === 429) {
-        return new Response(JSON.stringify({ error: "Rate limit exceeded. Please try again later." }), {
-          status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+        return jsonResponse({ error: "Rate limit exceeded. Please try again later." }, 429);
       }
       if (aiResponse.status === 402) {
-        return new Response(JSON.stringify({ error: "AI credits exhausted. Please add credits." }), {
-          status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+        return jsonResponse({ error: "AI credits exhausted. Please add credits." }, 402);
       }
       const errText = await aiResponse.text();
       console.error("AI gateway error:", aiResponse.status, errText);
       throw new Error("AI gateway error");
     }
 
+    if (stream) {
+      if (!aiResponse.body) throw new Error("AI gateway returned no stream body");
+
+      const reader = aiResponse.body.getReader();
+      const decoder = new TextDecoder();
+      let rawSse = "";
+
+      const passthrough = new ReadableStream({
+        async start(controller) {
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              if (value) {
+                rawSse += decoder.decode(value, { stream: true });
+                controller.enqueue(value);
+              }
+            }
+            rawSse += decoder.decode();
+          } catch (streamError) {
+            console.error("Streaming error:", streamError);
+            controller.error(streamError);
+            return;
+          } finally {
+            reader.releaseLock();
+          }
+
+          let replyText = "";
+          let tokensUsed = 0;
+
+          for (let rawLine of rawSse.split("\n")) {
+            if (rawLine.endsWith("\r")) rawLine = rawLine.slice(0, -1);
+            if (!rawLine.startsWith("data: ")) continue;
+
+            const payload = rawLine.slice(6).trim();
+            if (!payload || payload === "[DONE]") continue;
+
+            try {
+              const parsed = JSON.parse(payload);
+              const delta = parsed.choices?.[0]?.delta?.content;
+              if (typeof delta === "string") replyText += delta;
+              const usage = parsed.usage?.total_tokens;
+              if (typeof usage === "number") tokensUsed = usage;
+            } catch {
+              // Ignore non-JSON/partial lines.
+            }
+          }
+
+          const finalReply = replyText.trim() || "Sorry, I couldn't generate a response right now.";
+
+          const { error: assistantInsertError } = await supabase.from("messages").insert({
+            session_id: sessionId,
+            role: "assistant",
+            content: finalReply,
+          });
+          if (assistantInsertError) {
+            console.error("Failed to store streamed assistant reply:", assistantInsertError);
+          }
+
+          console.log(`Tokens used: ${tokensUsed}`);
+          controller.close();
+        },
+      });
+
+      return new Response(passthrough, {
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+        },
+      });
+    }
+
     const aiData = await aiResponse.json();
-    const reply = aiData.choices?.[0]?.message?.content || "Sorry, I don't have information about that.";
+    const reply = aiData.choices?.[0]?.message?.content || "Sorry, I couldn't generate a response right now.";
     const tokensUsed = aiData.usage?.total_tokens || 0;
 
-    // Store assistant reply
-    await supabase.from("messages").insert({
+    const { error: assistantMessageError } = await supabase.from("messages").insert({
       session_id: sessionId,
       role: "assistant",
       content: reply,
     });
+    if (assistantMessageError) throw assistantMessageError;
 
-    return new Response(
-      JSON.stringify({ reply, tokensUsed }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return jsonResponse({ reply, tokensUsed });
   } catch (e) {
     console.error("Chat error:", e);
-    return new Response(
-      JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return jsonResponse({ error: e instanceof Error ? e.message : "Unknown error" }, 500);
   }
 });
