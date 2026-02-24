@@ -1,6 +1,6 @@
 import { MessageSquarePlus, Trash2, MessageCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { Session } from "@/lib/sessions";
+import type { Session } from "@/lib/api";
 import { format } from "date-fns";
 
 interface SessionSidebarProps {
@@ -31,10 +31,10 @@ const SessionSidebar = ({
           <p className="px-2 py-4 text-center text-xs text-muted-foreground">No conversations yet</p>
         )}
         {sessions.map((session) => (
-          <button
+          <div
             key={session.id}
             onClick={() => onSelectSession(session.id)}
-            className={`group mb-1 flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm transition-colors ${
+            className={`group mb-1 flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm transition-colors ${
               activeSessionId === session.id
                 ? "bg-sidebar-accent text-sidebar-accent-foreground"
                 : "text-sidebar-foreground hover:bg-sidebar-accent/50"
@@ -44,10 +44,11 @@ const SessionSidebar = ({
             <div className="flex-1 truncate">
               <div className="truncate text-xs font-medium">Session</div>
               <div className="text-[10px] text-muted-foreground">
-                {format(new Date(session.updatedAt), "MMM d, h:mm a")}
+                {format(new Date(session.updated_at), "MMM d, h:mm a")}
               </div>
             </div>
-            <button
+            <span
+              role="button"
               onClick={(e) => {
                 e.stopPropagation();
                 onDeleteSession(session.id);
@@ -55,8 +56,8 @@ const SessionSidebar = ({
               className="hidden rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive group-hover:block"
             >
               <Trash2 className="h-3 w-3" />
-            </button>
-          </button>
+            </span>
+          </div>
         ))}
       </div>
     </div>

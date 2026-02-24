@@ -1,5 +1,5 @@
 import { Bot, User } from "lucide-react";
-import type { Message } from "@/lib/sessions";
+import type { Message } from "@/lib/api";
 import { format } from "date-fns";
 
 interface ChatMessageProps {
@@ -29,7 +29,7 @@ const ChatMessage = ({ message }: ChatMessageProps) => {
           {message.content}
         </div>
         <span className="text-[10px] text-muted-foreground px-1">
-          {format(new Date(message.createdAt), "h:mm a")}
+          {format(new Date(message.created_at), "h:mm a")}
         </span>
       </div>
     </div>
