@@ -9,7 +9,7 @@ import {
   fetchSessions,
   fetchMessages,
   deleteSessionApi,
-  sendMessage,
+  streamMessage,
   type Session,
   type Message,
 } from "@/lib/api";
@@ -101,28 +101,55 @@ const Index = () => {
     async (text: string) => {
       if (!activeSessionId) return;
 
+      const sessionId = activeSessionId;
+      const now = new Date().toISOString();
+
       // Optimistic user message
       const tempUserMsg: Message = {
         id: Date.now(),
-        session_id: activeSessionId,
+        session_id: sessionId,
         role: "user",
         content: text,
-        created_at: new Date().toISOString(),
+        created_at: now,
       };
       setMessages((prev) => [...prev, tempUserMsg]);
       setLoading(true);
 
+      const assistantMessageId = Date.now() + 1;
+      const assistantCreatedAt = new Date().toISOString();
+
       try {
-        const { reply, tokensUsed } = await sendMessage(activeSessionId, text);
-        const assistantMsg: Message = {
-          id: Date.now() + 1,
-          session_id: activeSessionId,
-          role: "assistant",
-          content: reply,
-          created_at: new Date().toISOString(),
-        };
-        setMessages((prev) => [...prev, assistantMsg]);
-        console.log(`Tokens used: ${tokensUsed}`);
+        await streamMessage(sessionId, text, {
+          onDelta: (chunk) => {
+            setMessages((prev) => {
+              const existingIndex = prev.findIndex((msg) => msg.id === assistantMessageId);
+
+              if (existingIndex === -1) {
+                return [
+                  ...prev,
+                  {
+                    id: assistantMessageId,
+                    session_id: sessionId,
+                    role: "assistant",
+                    content: chunk,
+                    created_at: assistantCreatedAt,
+                  },
+                ];
+              }
+
+              const updated = [...prev];
+              const existingMessage = updated[existingIndex];
+              updated[existingIndex] = {
+                ...existingMessage,
+                content: existingMessage.content + chunk,
+              };
+              return updated;
+            });
+          },
+          onDone: (tokensUsed) => {
+            console.log(`Tokens used: ${tokensUsed}`);
+          },
+        });
       } catch (e: any) {
         const errorContent = e?.message?.includes("429")
           ? "Rate limit exceeded. Please wait a moment and try again."
@@ -134,7 +161,7 @@ const Index = () => {
           ...prev,
           {
             id: Date.now() + 1,
-            session_id: activeSessionId,
+            session_id: sessionId,
             role: "assistant",
             content: errorContent,
             created_at: new Date().toISOString(),
