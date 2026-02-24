@@ -14,7 +14,56 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      messages: {
+        Row: {
+          content: string
+          created_at: string
+          id: number
+          role: string
+          session_id: string
+        }
+        Insert: {
+          content: string
+          created_at?: string
+          id?: number
+          role: string
+          session_id: string
+        }
+        Update: {
+          content?: string
+          created_at?: string
+          id?: number
+          role?: string
+          session_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "messages_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sessions: {
+        Row: {
+          created_at: string
+          id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

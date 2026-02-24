@@ -1,0 +1,22 @@
+[
+  {
+    "title": "Reset Password",
+    "content": "Users can reset password from Settings > Security. Click 'Forgot Password' on the login page, enter your email, and follow the link sent to your inbox to create a new password."
+  },
+  {
+    "title": "Refund Policy",
+    "content": "Refunds are allowed within 7 days of purchase. To request a refund, go to Orders > Select Order > Request Refund. Refunds are processed within 3-5 business days."
+  },
+  {
+    "title": "Account Settings",
+    "content": "You can manage your account settings by navigating to Settings > Account. From there you can update your profile, email, and notification preferences."
+  },
+  {
+    "title": "Billing",
+    "content": "Billing information can be managed from Settings > Billing. You can update your payment method, view invoices, and change your subscription plan."
+  },
+  {
+    "title": "Contact Support",
+    "content": "You can contact our support team by emailing support@example.com or by using the in-app chat feature available 24/7."
+  }
+]
